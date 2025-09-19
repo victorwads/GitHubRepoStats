@@ -1,0 +1,7 @@
+dist/
+node_modules/
+
+.env
+.pnp*
+.yarn/
+yarn.lock
