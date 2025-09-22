@@ -8,6 +8,7 @@ import type { RestEndpointMethodTypes } from "@octokit/rest";
 export interface FetchPullRequestsOptions {
   owner: string;
   repo: string;
+  extensions: string[];
   since?: Date;
   until?: Date;
   limit?: number;
@@ -72,11 +73,75 @@ async function listMergedPullRequestSummaries(
   octokit: Octokit,
   options: FetchPullRequestsOptions,
 ): Promise<PullRequestSummary[]> {
-  const { owner, repo, since, until, limit } = options;
+  const { owner, repo, since, until, limit, cacheDir } = options;
 
   const summaries: PullRequestSummary[] = [];
   const targetAmount = typeof limit === "number" && limit > 0 ? limit : undefined;
 
+  // Only use cache when both since and until are provided and until is at most yesterday
+  if (since && until && isUntilEligibleForCache(until)) {
+    const cachePath = computeRangeCacheFilePath(owner, repo, since, until, cacheDir);
+    const cached = await readCache(cachePath);
+    if (cached) {
+      try {
+        const parsed = cached as unknown as PullRequestSummary[];
+        // If limit is present, respect it
+        return typeof targetAmount === "number" ? parsed.slice(0, targetAmount) : parsed;
+      } catch (err) {
+        // ignore and fallthrough to fresh fetch
+      }
+    }
+    // otherwise fetch and write cache at the end
+    const iterator = octokit.paginate.iterator(octokit.pulls.list, {
+      owner,
+      repo,
+      state: "closed",
+      per_page: 100,
+      sort: "updated",
+      direction: "desc",
+    });
+
+    outer: for await (const { data } of iterator) {
+      for (const pull of data) {
+        if (!pull.merged_at) {
+          continue;
+        }
+
+        const mergedAt = new Date(pull.merged_at);
+
+        if (since && mergedAt < since) {
+          continue;
+        }
+
+        if (until && mergedAt > until) {
+          continue;
+        }
+
+        summaries.push({
+          number: pull.number,
+          title: pull.title ?? `PR #${pull.number}`,
+          url: pull.html_url ?? `https://github.com/${owner}/${repo}/pull/${pull.number}`,
+          owner: pull.user?.login ?? "unknown",
+          mergedAt,
+        });
+
+        if (targetAmount && summaries.length >= targetAmount) {
+          break outer;
+        }
+      }
+    }
+
+    // write cache asynchronously but await to ensure consistent behavior
+    try {
+      await writeCache(cachePath, summaries);
+    } catch (err) {
+      // ignore cache write failures
+    }
+
+    return summaries;
+  }
+
+  // default (no cache) path
   const iterator = octokit.paginate.iterator(octokit.pulls.list, {
     owner,
     repo,
@@ -119,6 +184,22 @@ async function listMergedPullRequestSummaries(
   return summaries;
 }
 
+function isUntilEligibleForCache(until: Date): boolean {
+  const now = new Date();
+  // compute yesterday at end of day: until must be <= yesterday (now - 1 day)
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999);
+  return until.getTime() <= yesterday.getTime();
+}
+
+function computeRangeCacheFilePath(owner: string, repo: string, since: Date, until: Date, cacheDir?: string): string {
+  const targetDir = path.join(cacheDir ?? DEFAULT_CACHE_DIR, owner, repo, 'range');
+  const sinceStr = since.toISOString();
+  const untilStr = until.toISOString();
+  // sanitize timestamps for filenames
+  const key = `since-${sinceStr.replace(/[:.]/g, "-")}-until-${untilStr.replace(/[:.]/g, "-")}.json`;
+  return path.join(targetDir, key);
+}
+
 interface CacheOptions {
   owner: string;
   repo: string;
@@ -150,7 +231,7 @@ async function getPullRequestWithCache(
 
 function computeCacheFilePath(pullNumber: number, options: CacheOptions): string {
   const targetDir = path.join(options.cacheDir ?? DEFAULT_CACHE_DIR, options.owner, options.repo);
-  return path.join(targetDir, `pr-${pullNumber}.json`);
+  return path.join(targetDir, 'pr', `${pullNumber}.json`);
 }
 
 async function getPullRequestFilesWithCache(
@@ -178,8 +259,8 @@ async function getPullRequestFilesWithCache(
 }
 
 function computeFilesCacheFilePath(pullNumber: number, options: CacheOptions): string {
-  const targetDir = path.join(options.cacheDir ?? DEFAULT_CACHE_DIR, options.owner, options.repo, "files");
-  return path.join(targetDir, `pr-${pullNumber}.json`);
+  const targetDir = path.join(options.cacheDir ?? DEFAULT_CACHE_DIR, options.owner, options.repo, "pr-files");
+  return path.join(targetDir, `${pullNumber}.json`);
 }
 
 async function readCache(filePath: string): Promise<unknown | undefined> {

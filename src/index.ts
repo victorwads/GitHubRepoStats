@@ -8,6 +8,7 @@ import { renderFileChangesTable, renderReportTable } from "./table";
 interface CliOptions {
   owner: string;
   repo: string;
+  extensions: string[];
   since?: Date;
   until?: Date;
   limit?: number;
@@ -58,6 +59,11 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("-c, --concurrency <number>", "Limitar requisições concorrentes ao GitHub", parseInteger, 6)
     .option("--cache-dir <path>", "Diretório para armazenar cache das respostas de PRs")
     .option("--json", "Exibir saída em JSON bruto", false)
+    .option("-e, --extensions <exts>", "Extensões de arquivo a considerar (separadas por vírgula) default: .ts,.tsx", (value: string) => 
+      value.split(",")
+        .map((ext: string) => ext.trim())
+        .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`))
+    , [".ts", ".tsx"])
     .option(
       "--ignore-file <pattern>",
       "Ignorar um arquivo ou diretório usando glob (pode ser usado várias vezes)",
@@ -70,21 +76,13 @@ export async function runCli(argv: string[]): Promise<void> {
       parseInteger,
       10,
     )
-    .action(async (options) => {
+    .action(async (options: CliOptions) => {
       const resolvedToken = resolveToken(options.token);
 
       const cliOptions: CliOptions = {
-        owner: options.owner,
-        repo: options.repo,
-        since: options.since,
-        until: options.until,
-        limit: options.limit,
+        ...options,
         token: resolvedToken,
-        concurrency: options.concurrency,
-        cacheDir: options.cacheDir,
-        json: options.json,
-        ignoreFilePatterns: options.ignoreFile,
-        filesLimit: options.filesLimit,
+        ignoreFilePatterns: (options as any).ignoreFile,
       };
 
       await execute(cliOptions);
@@ -96,14 +94,8 @@ export async function runCli(argv: string[]): Promise<void> {
 async function execute(options: CliOptions): Promise<void> {
   try {
     const report = await generateReport({
-      owner: options.owner,
-      repo: options.repo,
-      since: options.since,
-      until: options.until,
-      limit: options.limit,
-      token: options.token,
+      ...options,
       concurrentRequests: options.concurrency,
-      cacheDir: options.cacheDir,
       ignoredFilePatterns: options.ignoreFilePatterns,
     });
 

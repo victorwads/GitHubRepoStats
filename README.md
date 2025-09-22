@@ -14,3 +14,5 @@ Use `--json` para imprimir o relatório completo em JSON.
 
 - `--ignore-file <glob>`: ignora arquivos ou diretórios específicos ao contabilizar linhas (pode ser informado múltiplas vezes).
 - `--files-limit <n>`: exibe os `n` arquivos com mais alterações (use `0` para ocultar a tabela).
+
+> Por padrão apenas arquivos `*.ts` e `*.tsx` são considerados no cálculo das estatísticas. Ajuste a constante `ALLOWED_FILE_EXTENSIONS` em `src/report.ts` caso precise incluir mais extensões.

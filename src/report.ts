@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { minimatch } from "minimatch";
 
 import { fetchMergedPullRequests, type FetchPullRequestsOptions } from "./github";
@@ -24,11 +26,11 @@ export async function generateReport(options: GenerateReportOptions): Promise<Re
   const periodStart = determinePeriodStart(options, pulls.map((item) => item.summary.mergedAt));
   const periodEnd = determinePeriodEnd(options, pulls.map((item) => item.summary.mergedAt));
 
-  const users = buildUserReports(pulls, ignoreMatcher);
+  const users = buildUserReports(options, pulls, ignoreMatcher);
   const totals = computeTotals(users);
   const averages = computeAverages(totals, users.length);
   const table = buildTable(users);
-  const files = buildFileReport(pulls, ignoreMatcher);
+  const files = buildFileReport(options, pulls, ignoreMatcher);
 
   return {
     periodStart,
@@ -64,13 +66,14 @@ function determinePeriodEnd(options: FetchPullRequestsOptions, mergedDates: Date
 type IgnoreMatcher = (filePath: string) => boolean;
 
 function buildUserReports(
+  options: GenerateReportOptions,
   pulls: Awaited<ReturnType<typeof fetchMergedPullRequests>>,
   ignoreMatcher: IgnoreMatcher,
 ): ReportUserInfo[] {
   const userMap = new Map<string, ReportUserInfo>();
 
   for (const { summary, data, files } of pulls) {
-    const prFiles = buildPrFiles(files, ignoreMatcher);
+    const prFiles = buildPrFiles(options, files, ignoreMatcher);
     const linesAdded = sumFiles(prFiles, (file) => file.linesAdded);
     const linesDeleted = sumFiles(prFiles, (file) => file.linesDeleted);
     const filesChanged = prFiles.length;
@@ -124,10 +127,24 @@ function buildUserReports(
     existing.averages = computeAveragesFromTotals(existing.totals);
   }
 
-  return Array.from(userMap.values()).sort((a, b) => b.totals.prCount - a.totals.prCount);
+  return Array.from(userMap.values()).sort((a, b) => {
+    const totalChangesA = a.totals.linesAdded + a.totals.linesDeleted;
+    const totalChangesB = b.totals.linesAdded + b.totals.linesDeleted;
+
+    if (totalChangesB !== totalChangesA) {
+      return totalChangesB - totalChangesA;
+    }
+
+    if (b.totals.prCount !== a.totals.prCount) {
+      return b.totals.prCount - a.totals.prCount;
+    }
+
+    return a.owner.localeCompare(b.owner);
+  });
 }
 
 function buildFileReport(
+  options: GenerateReportOptions,
   pulls: Awaited<ReturnType<typeof fetchMergedPullRequests>>,
   ignoreMatcher: IgnoreMatcher,
 ): ReportFileInfo[] {
@@ -136,6 +153,10 @@ function buildFileReport(
   for (const { files } of pulls) {
     for (const file of files) {
       if (ignoreMatcher(file.filename)) {
+        continue;
+      }
+
+      if (!isAllowedExtension(options, file.filename)) {
         continue;
       }
 
@@ -228,10 +249,18 @@ function safeDivide(numerator: number, denominator: number): number {
   return numerator / denominator;
 }
 
-function buildPrFiles(files: { filename: string; additions?: number; deletions?: number; changes?: number }[], ignore: IgnoreMatcher): PRFileChangeInfo[] {
+function buildPrFiles(
+  options: GenerateReportOptions,
+  files: { filename: string; additions?: number; deletions?: number; changes?: number }[],
+  ignore: IgnoreMatcher
+): PRFileChangeInfo[] {
   const result: PRFileChangeInfo[] = [];
   for (const file of files) {
     if (ignore(file.filename)) {
+      continue;
+    }
+
+    if (!isAllowedExtension(options, file.filename)) {
       continue;
     }
     const linesAdded = file.additions ?? 0;
@@ -265,4 +294,16 @@ function buildIgnoreMatcher(patterns: string[]): IgnoreMatcher {
   }
 
   return (filePath) => sanitized.some((pattern) => minimatch(filePath, pattern, { dot: true }));
+}
+
+function isAllowedExtension(options: GenerateReportOptions, filePath: string): boolean {
+  const ALLOWED_FILE_EXTENSIONS = options.extensions
+  const set = new Set(ALLOWED_FILE_EXTENSIONS.map((extension: string) => extension.toLowerCase()));
+
+  if (set.size === 0) {
+    return true;
+  }
+
+  const extension = path.extname(filePath).toLowerCase();
+  return set.has(extension);
 }
