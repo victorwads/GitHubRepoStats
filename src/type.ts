@@ -1,18 +1,18 @@
-interface Totals {
+export interface Totals {
   linesAdded: number;
   linesDeleted: number;
   filesChanged: number;
   commitsCount: number;
 }
 
-interface Averages {
+export interface Averages {
   linesAdded: number;
   linesDeleted: number;
   filesChanged: number;
   commitsCount: number;
 }
 
-interface PRReportInfo {
+export interface PRReportInfo {
   prNumber: number;
   title: string;
   url: string;
@@ -21,14 +21,14 @@ interface PRReportInfo {
   totals: Totals;
 }
 
-interface ReportUserInfo {
+export interface ReportUserInfo {
   owner: string;
   totals: Totals & { prCount: number };
   averages: Averages;
   prs: PRReportInfo[];
 }
 
-interface ReportInfo {
+export interface ReportInfo {
   periodStart: Date;
   periodEnd: Date;
   totals: Totals & { prCount: number };
@@ -37,7 +37,7 @@ interface ReportInfo {
   table: ReportTableRow[];
 }
 
-interface ReportTableRow {
+export interface ReportTableRow {
   owner: string;
   prCount: number;
   linesAdded: number;

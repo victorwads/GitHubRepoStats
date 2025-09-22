@@ -1,17 +1,19 @@
+import "dotenv/config";
+
 import { Command, InvalidArgumentError } from "commander";
 import chalk from "chalk";
-import { fetchContributorStats, PullRequestState } from "./github";
-import { renderContributorTable } from "./table";
+import { generateReport } from "./report";
+import { renderReportTable } from "./table";
 
 interface CliOptions {
   owner: string;
   repo: string;
-  state: PullRequestState;
   since?: Date;
   until?: Date;
   limit?: number;
   token?: string;
   concurrency?: number;
+  cacheDir?: string;
   json?: boolean;
 }
 
@@ -35,28 +37,20 @@ function resolveToken(tokenOption?: string): string | undefined {
   return tokenOption ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
 }
 
-function validateState(state: string): PullRequestState {
-  const available: PullRequestState[] = ["open", "closed", "all", "merged"];
-  if (available.includes(state as PullRequestState)) {
-    return state as PullRequestState;
-  }
-  throw new InvalidArgumentError(`Invalid state: ${state}. Expected one of ${available.join(", ")}`);
-}
-
 export async function runCli(argv: string[]): Promise<void> {
   const program = new Command();
 
   program
     .name("github-stats")
-    .description("CLI para gerar estatísticas de contribuições de PRs no GitHub")
+    .description("CLI para gerar estatísticas detalhadas de PRs mergeados no GitHub")
     .requiredOption("-o, --owner <owner>", "Organização ou usuário do repositório")
     .requiredOption("-r, --repo <repo>", "Nome do repositório")
-    .option("-s, --state <state>", "Estado dos PRs (open|closed|all|merged)", validateState, "merged")
-    .option("--since <date>", "Considerar PRs a partir desta data (ISO)", parseDate)
-    .option("--until <date>", "Considerar PRs até esta data (ISO)", parseDate)
+    .option("--since <date>", "Considerar PRs mergeados a partir desta data (ISO)", parseDate)
+    .option("--until <date>", "Considerar PRs mergeados até esta data (ISO)", parseDate)
     .option("-l, --limit <number>", "Limitar a quantidade de PRs analisados", parseInteger)
     .option("-t, --token <token>", "Token do GitHub. Também lê GITHUB_TOKEN / GH_TOKEN")
     .option("-c, --concurrency <number>", "Limitar requisições concorrentes ao GitHub", parseInteger, 6)
+    .option("--cache-dir <path>", "Diretório para armazenar cache das respostas de PRs")
     .option("--json", "Exibir saída em JSON bruto", false)
     .action(async (options) => {
       const resolvedToken = resolveToken(options.token);
@@ -64,12 +58,12 @@ export async function runCli(argv: string[]): Promise<void> {
       const cliOptions: CliOptions = {
         owner: options.owner,
         repo: options.repo,
-        state: options.state,
         since: options.since,
         until: options.until,
         limit: options.limit,
         token: resolvedToken,
         concurrency: options.concurrency,
+        cacheDir: options.cacheDir,
         json: options.json,
       };
 
@@ -81,34 +75,37 @@ export async function runCli(argv: string[]): Promise<void> {
 
 async function execute(options: CliOptions): Promise<void> {
   try {
-    const { contributors, totalPullRequests } = await fetchContributorStats({
+    const report = await generateReport({
       owner: options.owner,
       repo: options.repo,
-      state: options.state,
       since: options.since,
       until: options.until,
       limit: options.limit,
       token: options.token,
       concurrentRequests: options.concurrency,
+      cacheDir: options.cacheDir,
     });
 
     if (options.json) {
-      const payload = {
-        repository: `${options.owner}/${options.repo}`,
-        state: options.state,
-        totalPullRequests,
-        contributors,
-      };
-      console.log(JSON.stringify(payload, null, 2));
+      console.log(JSON.stringify(report, null, 2));
       return;
     }
 
-    if (contributors.length === 0) {
-      console.log(chalk.yellow("Nenhum PR encontrado com os filtros informados."));
+    if (report.totals.prCount === 0) {
+      console.log(chalk.yellow("Nenhum PR mergeado encontrado com os filtros informados."));
       return;
     }
 
-    const table = renderContributorTable(contributors, { totalPullRequests });
+    console.log(
+      chalk.cyan(
+        `Período: ${formatDate(report.periodStart)} → ${formatDate(report.periodEnd)} | PRs: ${report.totals.prCount}`,
+      ),
+    );
+
+    const table = renderReportTable(report.table, {
+      totals: report.totals,
+      averages: report.averages,
+    });
     console.log(table);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -118,6 +115,10 @@ async function execute(options: CliOptions): Promise<void> {
     }
     process.exitCode = 1;
   }
+}
+
+function formatDate(date: Date): string {
+  return date.toISOString().split("T")[0];
 }
 
 if (require.main === module) {

@@ -1,151 +1,166 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
 import { Octokit } from "@octokit/rest";
 import pLimit from "p-limit";
+import type { RestEndpointMethodTypes } from "@octokit/rest";
 
-export type PullRequestState = "open" | "closed" | "all" | "merged";
-
-export interface FetchStatsOptions {
+export interface FetchPullRequestsOptions {
   owner: string;
   repo: string;
-  state: PullRequestState;
   since?: Date;
   until?: Date;
   limit?: number;
   token?: string;
   concurrentRequests?: number;
+  cacheDir?: string;
 }
 
-export interface ContributorStats {
-  login: string;
-  pullRequests: number;
-  additions: number;
-  deletions: number;
-}
-
-export interface FetchResult {
-  contributors: ContributorStats[];
-  totalPullRequests: number;
-}
-
-interface MinimalPullRequest {
+export interface PullRequestSummary {
   number: number;
-  user?: { login?: string | null } | null;
-  merged_at?: string | null;
-  updated_at?: string | null;
-  created_at?: string | null;
+  title: string;
+  url: string;
+  owner: string;
+  mergedAt: Date;
 }
 
-export async function fetchContributorStats(options: FetchStatsOptions): Promise<FetchResult> {
-  const { owner, repo, state, since, until, limit, token, concurrentRequests = 6 } = options;
+export type PullRequestData = RestEndpointMethodTypes["pulls"]["get"]["response"]["data"];
+
+export interface PullRequestWithDetails {
+  summary: PullRequestSummary;
+  data: PullRequestData;
+}
+
+const DEFAULT_CACHE_DIR = path.resolve(process.cwd(), ".cache");
+
+export async function fetchMergedPullRequests(
+  options: FetchPullRequestsOptions,
+): Promise<PullRequestWithDetails[]> {
+  const { owner, repo, token, concurrentRequests = 6 } = options;
 
   const octokit = new Octokit({ auth: token });
 
-  const apiState = state === "merged" ? "closed" : state;
+  const summaries = await listMergedPullRequestSummaries(octokit, options);
 
-  const collected: MinimalPullRequest[] = [];
+  const limiter = pLimit(sanitizeConcurrency(concurrentRequests));
+
+  const detailedPulls = await Promise.all(
+    summaries.map((summary) =>
+      limiter(async () => {
+        const data = await getPullRequestWithCache(octokit, summary.number, {
+          owner,
+          repo,
+          cacheDir: options.cacheDir,
+        });
+        return { summary, data } satisfies PullRequestWithDetails;
+      }),
+    ),
+  );
+
+  return detailedPulls;
+}
+
+async function listMergedPullRequestSummaries(
+  octokit: Octokit,
+  options: FetchPullRequestsOptions,
+): Promise<PullRequestSummary[]> {
+  const { owner, repo, since, until, limit } = options;
+
+  const summaries: PullRequestSummary[] = [];
   const targetAmount = typeof limit === "number" && limit > 0 ? limit : undefined;
 
   const iterator = octokit.paginate.iterator(octokit.pulls.list, {
     owner,
     repo,
-    state: apiState,
+    state: "closed",
     per_page: 100,
-    sort: "created",
+    sort: "updated",
     direction: "desc",
   });
 
   outer: for await (const { data } of iterator) {
-    for (const raw of data) {
-      const pull = normalizePull(raw);
-
-      if (state === "merged" && !pull.merged_at) {
+    for (const pull of data) {
+      if (!pull.merged_at) {
         continue;
       }
 
-      if (!passesDateFilters(pull, state, since, until)) {
+      const mergedAt = new Date(pull.merged_at);
+
+      if (since && mergedAt < since) {
         continue;
       }
 
-      collected.push(pull);
+      if (until && mergedAt > until) {
+        continue;
+      }
 
-      if (targetAmount && collected.length >= targetAmount) {
+      summaries.push({
+        number: pull.number,
+        title: pull.title ?? `PR #${pull.number}`,
+        url: pull.html_url ?? `https://github.com/${owner}/${repo}/pull/${pull.number}`,
+        owner: pull.user?.login ?? "unknown",
+        mergedAt,
+      });
+
+      if (targetAmount && summaries.length >= targetAmount) {
         break outer;
       }
     }
   }
 
-  const limiter = pLimit(sanitizeConcurrency(concurrentRequests));
-
-  const detailedPulls = await Promise.all(
-    collected.map((pull) =>
-      limiter(async () => {
-        const { data } = await octokit.pulls.get({
-          owner,
-          repo,
-          pull_number: pull.number,
-        });
-        return data;
-      }),
-    ),
-  );
-
-  const contributions = new Map<string, ContributorStats>();
-
-  for (const pull of detailedPulls) {
-    const login = pull.user?.login ?? "unknown";
-    const current = contributions.get(login) ?? { login, pullRequests: 0, additions: 0, deletions: 0 };
-
-    const additions = pull.additions ?? 0;
-    const deletions = pull.deletions ?? 0;
-
-    contributions.set(login, {
-      login,
-      pullRequests: current.pullRequests + 1,
-      additions: current.additions + additions,
-      deletions: current.deletions + deletions,
-    });
-  }
-
-  const contributors = Array.from(contributions.values()).sort((a, b) => {
-    if (b.pullRequests !== a.pullRequests) {
-      return b.pullRequests - a.pullRequests;
-    }
-    if (b.additions !== a.additions) {
-      return b.additions - a.additions;
-    }
-    return b.deletions - a.deletions;
-  });
-
-  return {
-    contributors,
-    totalPullRequests: detailedPulls.length,
-  };
+  return summaries;
 }
 
-function passesDateFilters(
-  pull: MinimalPullRequest,
-  state: PullRequestState,
-  since?: Date,
-  until?: Date,
-): boolean {
-  if (!since && !until) {
-    return true;
+interface CacheOptions {
+  owner: string;
+  repo: string;
+  cacheDir?: string;
+}
+
+async function getPullRequestWithCache(
+  octokit: Octokit,
+  pullNumber: number,
+  options: CacheOptions,
+): Promise<PullRequestData> {
+  const cachePath = computeCacheFilePath(pullNumber, options);
+
+  const cached = await readCache(cachePath);
+  if (cached) {
+    return cached as PullRequestData;
   }
 
-  const referenceDate = chooseReferenceDate(pull, state);
+  const { data } = await octokit.pulls.get({
+    owner: options.owner,
+    repo: options.repo,
+    pull_number: pullNumber,
+  });
 
-  if (!referenceDate) {
-    return true;
+  await writeCache(cachePath, data);
+
+  return data;
+}
+
+function computeCacheFilePath(pullNumber: number, options: CacheOptions): string {
+  const targetDir = path.join(options.cacheDir ?? DEFAULT_CACHE_DIR, options.owner, options.repo);
+  return path.join(targetDir, `pr-${pullNumber}.json`);
+}
+
+async function readCache(filePath: string): Promise<unknown | undefined> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    return JSON.parse(content);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
   }
+}
 
-  if (since && referenceDate < since) {
-    return false;
-  }
-
-  if (until && referenceDate > until) {
-    return false;
-  }
-
-  return true;
+async function writeCache(filePath: string, data: unknown): Promise<void> {
+  const directory = path.dirname(filePath);
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
 function sanitizeConcurrency(concurrency: number | undefined): number {
@@ -153,30 +168,4 @@ function sanitizeConcurrency(concurrency: number | undefined): number {
     return 6;
   }
   return Math.max(1, Math.min(25, Math.trunc(concurrency)));
-}
-
-function normalizePull(pull: any): MinimalPullRequest {
-  return {
-    number: pull.number,
-    user: pull.user,
-    merged_at: pull.merged_at,
-    updated_at: pull.updated_at,
-    created_at: pull.created_at,
-  };
-}
-
-function chooseReferenceDate(pull: MinimalPullRequest, state: PullRequestState): Date | undefined {
-  const mergedAt = pull.merged_at ? new Date(pull.merged_at) : undefined;
-  const updatedAt = pull.updated_at ? new Date(pull.updated_at) : undefined;
-  const createdAt = pull.created_at ? new Date(pull.created_at) : undefined;
-
-  if (state === "merged") {
-    return mergedAt;
-  }
-
-  if (state === "closed") {
-    return mergedAt ?? updatedAt ?? createdAt;
-  }
-
-  return createdAt ?? updatedAt ?? mergedAt;
 }
