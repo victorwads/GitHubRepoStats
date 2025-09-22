@@ -26,9 +26,12 @@ export interface PullRequestSummary {
 
 export type PullRequestData = RestEndpointMethodTypes["pulls"]["get"]["response"]["data"];
 
+export type PullRequestFile = RestEndpointMethodTypes["pulls"]["listFiles"]["response"]["data"][number];
+
 export interface PullRequestWithDetails {
   summary: PullRequestSummary;
   data: PullRequestData;
+  files: PullRequestFile[];
 }
 
 const DEFAULT_CACHE_DIR = path.resolve(process.cwd(), ".cache");
@@ -47,12 +50,17 @@ export async function fetchMergedPullRequests(
   const detailedPulls = await Promise.all(
     summaries.map((summary) =>
       limiter(async () => {
-        const data = await getPullRequestWithCache(octokit, summary.number, {
+        const cacheOptions: CacheOptions = {
           owner,
           repo,
           cacheDir: options.cacheDir,
-        });
-        return { summary, data } satisfies PullRequestWithDetails;
+        };
+
+        const [data, files] = await Promise.all([
+          getPullRequestWithCache(octokit, summary.number, cacheOptions),
+          getPullRequestFilesWithCache(octokit, summary.number, cacheOptions),
+        ]);
+        return { summary, data, files } satisfies PullRequestWithDetails;
       }),
     ),
   );
@@ -142,6 +150,35 @@ async function getPullRequestWithCache(
 
 function computeCacheFilePath(pullNumber: number, options: CacheOptions): string {
   const targetDir = path.join(options.cacheDir ?? DEFAULT_CACHE_DIR, options.owner, options.repo);
+  return path.join(targetDir, `pr-${pullNumber}.json`);
+}
+
+async function getPullRequestFilesWithCache(
+  octokit: Octokit,
+  pullNumber: number,
+  options: CacheOptions,
+): Promise<PullRequestFile[]> {
+  const cachePath = computeFilesCacheFilePath(pullNumber, options);
+
+  const cached = await readCache(cachePath);
+  if (cached) {
+    return cached as PullRequestFile[];
+  }
+
+  const files = await octokit.paginate(octokit.pulls.listFiles, {
+    owner: options.owner,
+    repo: options.repo,
+    pull_number: pullNumber,
+    per_page: 100,
+  });
+
+  await writeCache(cachePath, files);
+
+  return files as PullRequestFile[];
+}
+
+function computeFilesCacheFilePath(pullNumber: number, options: CacheOptions): string {
+  const targetDir = path.join(options.cacheDir ?? DEFAULT_CACHE_DIR, options.owner, options.repo, "files");
   return path.join(targetDir, `pr-${pullNumber}.json`);
 }
 

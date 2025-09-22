@@ -1,6 +1,6 @@
 import Table from "cli-table3";
 import chalk from "chalk";
-import type { Averages, ReportTableRow, Totals } from "./type";
+import type { Averages, ReportFileInfo, ReportTableRow, Totals } from "./type";
 
 const integerFormatter = new Intl.NumberFormat("en-US");
 const decimalFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 });
@@ -69,6 +69,35 @@ export function renderReportTable(rows: ReportTableRow[], options: TableRenderOp
     "",
     "",
   ]);
+
+  return table.toString();
+}
+
+export function renderFileChangesTable(files: ReportFileInfo[], limit: number): string {
+  const table = new Table({
+    head: [
+      chalk.cyan("Arquivo"),
+      chalk.cyan("PRs"),
+      chalk.cyan("Lines +"),
+      chalk.cyan("Lines -"),
+      chalk.cyan("Total"),
+    ],
+    colAligns: ["left", "right", "right", "right", "right"],
+    style: { head: [], border: [] },
+    wordWrap: true,
+  });
+
+  const rows = files.slice(0, Math.max(0, limit));
+
+  for (const file of rows) {
+    table.push([
+      chalk.green(file.path),
+      formatInteger(file.prCount),
+      chalk.blue(formatInteger(file.linesAdded)),
+      chalk.red(formatInteger(file.linesDeleted)),
+      formatInteger(file.totalChanges),
+    ]);
+  }
 
   return table.toString();
 }

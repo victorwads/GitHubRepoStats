@@ -3,7 +3,7 @@ import "dotenv/config";
 import { Command, InvalidArgumentError } from "commander";
 import chalk from "chalk";
 import { generateReport } from "./report";
-import { renderReportTable } from "./table";
+import { renderFileChangesTable, renderReportTable } from "./table";
 
 interface CliOptions {
   owner: string;
@@ -15,6 +15,8 @@ interface CliOptions {
   concurrency?: number;
   cacheDir?: string;
   json?: boolean;
+  ignoreFilePatterns?: string[];
+  filesLimit: number;
 }
 
 function parseDate(value: string): Date {
@@ -37,6 +39,10 @@ function resolveToken(tokenOption?: string): string | undefined {
   return tokenOption ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
 }
 
+function collectPatterns(value: string, accumulator: string[] = []): string[] {
+  return [...accumulator, value];
+}
+
 export async function runCli(argv: string[]): Promise<void> {
   const program = new Command();
 
@@ -52,6 +58,18 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("-c, --concurrency <number>", "Limitar requisições concorrentes ao GitHub", parseInteger, 6)
     .option("--cache-dir <path>", "Diretório para armazenar cache das respostas de PRs")
     .option("--json", "Exibir saída em JSON bruto", false)
+    .option(
+      "--ignore-file <pattern>",
+      "Ignorar um arquivo ou diretório usando glob (pode ser usado várias vezes)",
+      collectPatterns,
+      [],
+    )
+    .option(
+      "--files-limit <number>",
+      "Quantidade de arquivos mais alterados para exibir (0 para ocultar)",
+      parseInteger,
+      10,
+    )
     .action(async (options) => {
       const resolvedToken = resolveToken(options.token);
 
@@ -65,6 +83,8 @@ export async function runCli(argv: string[]): Promise<void> {
         concurrency: options.concurrency,
         cacheDir: options.cacheDir,
         json: options.json,
+        ignoreFilePatterns: options.ignoreFile,
+        filesLimit: options.filesLimit,
       };
 
       await execute(cliOptions);
@@ -84,6 +104,7 @@ async function execute(options: CliOptions): Promise<void> {
       token: options.token,
       concurrentRequests: options.concurrency,
       cacheDir: options.cacheDir,
+      ignoredFilePatterns: options.ignoreFilePatterns,
     });
 
     if (options.json) {
@@ -107,6 +128,11 @@ async function execute(options: CliOptions): Promise<void> {
       averages: report.averages,
     });
     console.log(table);
+
+    if (options.filesLimit > 0 && report.files.length > 0) {
+      const filesTable = renderFileChangesTable(report.files, options.filesLimit);
+      console.log("\n" + filesTable);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(chalk.red(`Erro ao gerar estatísticas: ${message}`));

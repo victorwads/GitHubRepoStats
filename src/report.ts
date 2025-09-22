@@ -1,25 +1,34 @@
+import { minimatch } from "minimatch";
+
 import { fetchMergedPullRequests, type FetchPullRequestsOptions } from "./github";
 import type {
   Averages,
+  PRFileChangeInfo,
   PRReportInfo,
   ReportInfo,
+  ReportFileInfo,
   ReportTableRow,
   ReportUserInfo,
   Totals,
 } from "./type";
 
-interface GenerateReportOptions extends FetchPullRequestsOptions {}
+interface GenerateReportOptions extends FetchPullRequestsOptions {
+  ignoredFilePatterns?: string[];
+}
 
 export async function generateReport(options: GenerateReportOptions): Promise<ReportInfo> {
   const pulls = await fetchMergedPullRequests(options);
 
+  const ignoreMatcher = buildIgnoreMatcher(options.ignoredFilePatterns ?? []);
+
   const periodStart = determinePeriodStart(options, pulls.map((item) => item.summary.mergedAt));
   const periodEnd = determinePeriodEnd(options, pulls.map((item) => item.summary.mergedAt));
 
-  const users = buildUserReports(pulls);
+  const users = buildUserReports(pulls, ignoreMatcher);
   const totals = computeTotals(users);
   const averages = computeAverages(totals, users.length);
   const table = buildTable(users);
+  const files = buildFileReport(pulls, ignoreMatcher);
 
   return {
     periodStart,
@@ -28,6 +37,7 @@ export async function generateReport(options: GenerateReportOptions): Promise<Re
     averages,
     users,
     table,
+    files,
   };
 }
 
@@ -51,13 +61,19 @@ function determinePeriodEnd(options: FetchPullRequestsOptions, mergedDates: Date
   return new Date();
 }
 
-function buildUserReports(pulls: Awaited<ReturnType<typeof fetchMergedPullRequests>>): ReportUserInfo[] {
+type IgnoreMatcher = (filePath: string) => boolean;
+
+function buildUserReports(
+  pulls: Awaited<ReturnType<typeof fetchMergedPullRequests>>,
+  ignoreMatcher: IgnoreMatcher,
+): ReportUserInfo[] {
   const userMap = new Map<string, ReportUserInfo>();
 
-  for (const { summary, data } of pulls) {
-    const linesAdded = data.additions ?? 0;
-    const linesDeleted = data.deletions ?? 0;
-    const filesChanged = data.changed_files ?? 0;
+  for (const { summary, data, files } of pulls) {
+    const prFiles = buildPrFiles(files, ignoreMatcher);
+    const linesAdded = sumFiles(prFiles, (file) => file.linesAdded);
+    const linesDeleted = sumFiles(prFiles, (file) => file.linesDeleted);
+    const filesChanged = prFiles.length;
     const commitsCount = data.commits ?? 0;
 
     const prInfo: PRReportInfo = {
@@ -72,6 +88,7 @@ function buildUserReports(pulls: Awaited<ReturnType<typeof fetchMergedPullReques
         filesChanged,
         commitsCount,
       },
+      files: prFiles,
     };
 
     const existing = userMap.get(summary.owner);
@@ -108,6 +125,49 @@ function buildUserReports(pulls: Awaited<ReturnType<typeof fetchMergedPullReques
   }
 
   return Array.from(userMap.values()).sort((a, b) => b.totals.prCount - a.totals.prCount);
+}
+
+function buildFileReport(
+  pulls: Awaited<ReturnType<typeof fetchMergedPullRequests>>,
+  ignoreMatcher: IgnoreMatcher,
+): ReportFileInfo[] {
+  const fileMap = new Map<string, ReportFileInfo>();
+
+  for (const { files } of pulls) {
+    for (const file of files) {
+      if (ignoreMatcher(file.filename)) {
+        continue;
+      }
+
+      const linesAdded = file.additions ?? 0;
+      const linesDeleted = file.deletions ?? 0;
+      const totalChanges = resolveTotalChanges(file.changes, linesAdded, linesDeleted);
+
+      const existing = fileMap.get(file.filename);
+      if (!existing) {
+        fileMap.set(file.filename, {
+          path: file.filename,
+          linesAdded,
+          linesDeleted,
+          totalChanges,
+          prCount: 1,
+        });
+        continue;
+      }
+
+      existing.linesAdded += linesAdded;
+      existing.linesDeleted += linesDeleted;
+      existing.totalChanges += totalChanges;
+      existing.prCount += 1;
+    }
+  }
+
+  return Array.from(fileMap.values()).sort((a, b) => {
+    if (b.totalChanges !== a.totalChanges) {
+      return b.totalChanges - a.totalChanges;
+    }
+    return a.path.localeCompare(b.path);
+  });
 }
 
 function computeTotals(users: ReportUserInfo[]): Totals & { prCount: number } {
@@ -166,4 +226,43 @@ function safeDivide(numerator: number, denominator: number): number {
     return 0;
   }
   return numerator / denominator;
+}
+
+function buildPrFiles(files: { filename: string; additions?: number; deletions?: number; changes?: number }[], ignore: IgnoreMatcher): PRFileChangeInfo[] {
+  const result: PRFileChangeInfo[] = [];
+  for (const file of files) {
+    if (ignore(file.filename)) {
+      continue;
+    }
+    const linesAdded = file.additions ?? 0;
+    const linesDeleted = file.deletions ?? 0;
+    const totalChanges = resolveTotalChanges(file.changes, linesAdded, linesDeleted);
+    result.push({
+      path: file.filename,
+      linesAdded,
+      linesDeleted,
+      totalChanges,
+    });
+  }
+  return result;
+}
+
+function sumFiles(files: PRFileChangeInfo[], selector: (file: PRFileChangeInfo) => number): number {
+  return files.reduce((accumulator, file) => accumulator + selector(file), 0);
+}
+
+function resolveTotalChanges(changes: number | undefined, linesAdded: number, linesDeleted: number): number {
+  if (typeof changes === "number") {
+    return changes;
+  }
+  return linesAdded + linesDeleted;
+}
+
+function buildIgnoreMatcher(patterns: string[]): IgnoreMatcher {
+  const sanitized = patterns.filter((pattern) => pattern.trim().length > 0);
+  if (sanitized.length === 0) {
+    return () => false;
+  }
+
+  return (filePath) => sanitized.some((pattern) => minimatch(filePath, pattern, { dot: true }));
 }

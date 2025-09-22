@@ -12,6 +12,17 @@ export interface Averages {
   commitsCount: number;
 }
 
+export interface PRFileChangeInfo {
+  path: string;
+  linesAdded: number;
+  linesDeleted: number;
+  totalChanges: number;
+}
+
+export interface ReportFileInfo extends PRFileChangeInfo {
+  prCount: number;
+}
+
 export interface PRReportInfo {
   prNumber: number;
   title: string;
@@ -19,6 +30,7 @@ export interface PRReportInfo {
   owner: string;
   mergedAt: Date;
   totals: Totals;
+  files: PRFileChangeInfo[];
 }
 
 export interface ReportUserInfo {
@@ -35,6 +47,7 @@ export interface ReportInfo {
   averages: Averages & { prCount: number };
   users: ReportUserInfo[];
   table: ReportTableRow[];
+  files: ReportFileInfo[];
 }
 
 export interface ReportTableRow {
