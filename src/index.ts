@@ -50,8 +50,8 @@ export async function runCli(argv: string[]): Promise<void> {
   program
     .name("github-stats")
     .description("CLI para gerar estatísticas detalhadas de PRs mergeados no GitHub")
-    .requiredOption("-o, --owner <owner>", "Organização ou usuário do repositório")
-    .requiredOption("-r, --repo <repo>", "Nome do repositório")
+    .option("-o, --owner <owner>", "Organização ou usuário do repositório (padrão do .env)", process.env.GITHUB_OWNER)
+    .option("-r, --repo <repo>", "Nome do repositório (padrão do .env)", process.env.GITHUB_REPO)
     .option("--since <date>", "Considerar PRs mergeados a partir desta data (ISO)", parseDate)
     .option("--until <date>", "Considerar PRs mergeados até esta data (ISO)", parseDate)
     .option("-l, --limit <number>", "Limitar a quantidade de PRs analisados", parseInteger)
@@ -88,9 +88,31 @@ export async function runCli(argv: string[]): Promise<void> {
       await execute(cliOptions);
     });
 
+    program
+      .command("pr-info <number>")
+      .description("Exibe informações detalhadas de um PR específico")
+      .option("-o, --owner <owner>", "Organização ou usuário do repositório (padrão do .env)", process.env.GITHUB_OWNER)
+      .option("-r, --repo <repo>", "Nome do repositório (padrão do .env)", process.env.GITHUB_REPO)
+      .option("-t, --token <token>", "Token do GitHub. Também lê GITHUB_TOKEN / GH_TOKEN")
+  .option("--comments", "Exibir comentários do PR", false)
+  .option("--diffs", "Exibir o conteúdo do diff do PR", false)
+      .action(async (prNumber: string, options: { owner?: string; repo?: string; token?: string; comments?: boolean; diffs?: boolean }) => {
+        const owner = options.owner || process.env.GITHUB_OWNER;
+        const repo = options.repo || process.env.GITHUB_REPO;
+        const token = resolveToken(options.token);
+        const showComments = !!options.comments;
+        const showDiffs = !!options.diffs;
+        if (!owner || !repo) {
+          console.error(chalk.red("Owner e repo devem ser informados via argumento ou .env"));
+          process.exit(1);
+        }
+        await showPrInfo({ owner, repo, prNumber: Number(prNumber), token, showComments, showDiffs });
+      });
+
   await program.parseAsync(argv);
 }
 
+import { showPrInfo } from "./pr_info";
 async function execute(options: CliOptions): Promise<void> {
   try {
     const report = await generateReport({
