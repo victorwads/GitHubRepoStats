@@ -23,6 +23,14 @@ export interface ReportFileInfo extends PRFileChangeInfo {
   prCount: number;
 }
 
+export interface ReportExtensionInfo {
+  extension: string;
+  linesAdded: number;
+  linesDeleted: number;
+  totalChanges: number;
+  filesCount: number;
+}
+
 export interface PRReportInfo {
   prNumber: number;
   title: string;
@@ -48,6 +56,7 @@ export interface ReportInfo {
   users: ReportUserInfo[];
   table: ReportTableRow[];
   files: ReportFileInfo[];
+  extensions: ReportExtensionInfo[];
 }
 
 export interface ReportTableRow {
@@ -61,4 +70,5 @@ export interface ReportTableRow {
   avgLinesDeleted: number;
   avgFilesChanged: number;
   avgCommitsCount: number;
+  extensionLineCounts: Record<string, { added: number; deleted: number }>;
 }

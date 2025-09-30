@@ -1,6 +1,9 @@
+function formatPM(plus: number, minus: number): string {
+  return `${chalk.blue("+" + formatInteger(plus))}${chalk.gray(",")}${chalk.red("-" + formatInteger(minus))}`;
+}
 import Table from "cli-table3";
 import chalk from "chalk";
-import type { Averages, ReportFileInfo, ReportTableRow, Totals } from "./type";
+import type { Averages, ReportExtensionInfo, ReportFileInfo, ReportTableRow, Totals } from "./type";
 
 const integerFormatter = new Intl.NumberFormat("en-US");
 const decimalFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 });
@@ -11,20 +14,31 @@ export interface TableRenderOptions {
 }
 
 export function renderReportTable(rows: ReportTableRow[], options: TableRenderOptions): string {
+  // Descobre todas as extensões presentes
+  const allExtensions = Array.from(
+    new Set(
+      rows.flatMap((row) => Object.keys(row.extensionLineCounts))
+    )
+  ).sort();
+
+  const head = [
+    chalk.cyan("Owner"),
+    chalk.cyan("PRs"),
+    chalk.cyan("Commits"),
+    chalk.cyan("Files"),
+    chalk.cyan("Lines +/-"),
+    chalk.cyan("Avg Commits"),
+    chalk.cyan("Avg Files"),
+    chalk.cyan("Avg +/-"),
+    ...allExtensions.map((ext) => chalk.cyan(ext)),
+  ];
+  const colAligns = [
+    "left", "right", "right", "right", "right", "right", "right", "right", "right",
+    ...Array(allExtensions.length).fill("right"),
+  ];
   const table = new Table({
-    head: [
-      chalk.cyan("Owner"),
-      chalk.cyan("PRs"),
-      chalk.cyan("Lines +"),
-      chalk.cyan("Lines -"),
-      chalk.cyan("Files"),
-      chalk.cyan("Commits"),
-      chalk.cyan("Avg +"),
-      chalk.cyan("Avg -"),
-      chalk.cyan("Avg Files"),
-      chalk.cyan("Avg Commits"),
-    ],
-    colAligns: ["left", "right", "right", "right", "right", "right", "right", "right", "right", "right"],
+    head,
+    colAligns,
     style: { head: [], border: [] },
     wordWrap: true,
   });
@@ -33,28 +47,44 @@ export function renderReportTable(rows: ReportTableRow[], options: TableRenderOp
     table.push([
       chalk.green(row.owner),
       formatInteger(row.prCount),
-      chalk.blue(formatInteger(row.linesAdded)),
-      chalk.red(formatInteger(row.linesDeleted)),
-      formatInteger(row.filesChanged),
       formatInteger(row.commitsCount),
-      chalk.blue(formatDecimal(row.avgLinesAdded)),
-      chalk.red(formatDecimal(row.avgLinesDeleted)),
-      formatDecimal(row.avgFilesChanged),
+      formatInteger(row.filesChanged),
+      formatPM(row.linesAdded, row.linesDeleted),
       formatDecimal(row.avgCommitsCount),
+      formatDecimal(row.avgFilesChanged),
+      `${chalk.blue(formatDecimal(row.avgLinesAdded))}${chalk.gray(",")}${chalk.red("-" + formatDecimal(row.avgLinesDeleted))}`,
+      ...allExtensions.map((ext) => {
+        const added = row.extensionLineCounts[ext]?.added ?? 0;
+        const deleted = row.extensionLineCounts[ext]?.deleted ?? 0;
+        return formatPM(added, deleted);
+      }),
     ]);
+  }
+
+  // Totais por extensão
+  const totalExtensionCounts: Record<string, { added: number; deleted: number }> = {};
+  for (const ext of allExtensions) {
+    totalExtensionCounts[ext] = { added: 0, deleted: 0 };
+    for (const row of rows) {
+      totalExtensionCounts[ext].added += row.extensionLineCounts[ext]?.added ?? 0;
+      totalExtensionCounts[ext].deleted += row.extensionLineCounts[ext]?.deleted ?? 0;
+    }
   }
 
   table.push([
     chalk.bold("Total"),
     chalk.bold(formatInteger(options.totals.prCount)),
-    chalk.bold(chalk.blue(formatInteger(options.totals.linesAdded))),
-    chalk.bold(chalk.red(formatInteger(options.totals.linesDeleted))),
-    chalk.bold(formatInteger(options.totals.filesChanged)),
     chalk.bold(formatInteger(options.totals.commitsCount)),
-    chalk.bold(chalk.blue(formatDecimal(options.averages.linesAdded))),
-    chalk.bold(chalk.red(formatDecimal(options.averages.linesDeleted))),
-    chalk.bold(formatDecimal(options.averages.filesChanged)),
+    chalk.bold(formatInteger(options.totals.filesChanged)),
+    formatPM(options.totals.linesAdded, options.totals.linesDeleted),
     chalk.bold(formatDecimal(options.averages.commitsCount)),
+    chalk.bold(formatDecimal(options.averages.filesChanged)),
+    `${chalk.bold(chalk.blue(formatDecimal(options.averages.linesAdded)))}${chalk.gray(",")}${chalk.bold(chalk.red("-" + formatDecimal(options.averages.linesDeleted)))}`,
+    ...allExtensions.map((ext) => {
+      const added = totalExtensionCounts[ext].added;
+      const deleted = totalExtensionCounts[ext].deleted;
+      return formatPM(added, deleted);
+    }),
   ]);
 
   table.push([
@@ -66,8 +96,7 @@ export function renderReportTable(rows: ReportTableRow[], options: TableRenderOp
     "",
     "",
     "",
-    "",
-    "",
+    ...Array(allExtensions.length).fill("")
   ]);
 
   return table.toString();
@@ -96,6 +125,33 @@ export function renderFileChangesTable(files: ReportFileInfo[], limit: number): 
       chalk.blue(formatInteger(file.linesAdded)),
       chalk.red(formatInteger(file.linesDeleted)),
       formatInteger(file.totalChanges),
+    ]);
+  }
+
+  return table.toString();
+}
+
+export function renderExtensionChangesTable(extensions: ReportExtensionInfo[]): string {
+  const table = new Table({
+    head: [
+      chalk.cyan("Extensão"),
+      chalk.cyan("Arquivos"),
+      chalk.cyan("Lines +"),
+      chalk.cyan("Lines -"),
+      chalk.cyan("Total"),
+    ],
+    colAligns: ["left", "right", "right", "right", "right"],
+    style: { head: [], border: [] },
+    wordWrap: true,
+  });
+
+  for (const extension of extensions) {
+    table.push([
+      chalk.green(extension.extension),
+      formatInteger(extension.filesCount),
+      chalk.blue(formatInteger(extension.linesAdded)),
+      chalk.red(formatInteger(extension.linesDeleted)),
+      formatInteger(extension.totalChanges),
     ]);
   }
 

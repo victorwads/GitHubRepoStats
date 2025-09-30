@@ -7,6 +7,7 @@ import type {
   Averages,
   PRFileChangeInfo,
   PRReportInfo,
+  ReportExtensionInfo,
   ReportInfo,
   ReportFileInfo,
   ReportTableRow,
@@ -31,6 +32,7 @@ export async function generateReport(options: GenerateReportOptions): Promise<Re
   const averages = computeAverages(totals, users.length);
   const table = buildTable(users);
   const files = buildFileReport(options, pulls, ignoreMatcher);
+  const extensions = buildExtensionReport(files);
 
   return {
     periodStart,
@@ -40,6 +42,7 @@ export async function generateReport(options: GenerateReportOptions): Promise<Re
     users,
     table,
     files,
+    extensions,
   };
 }
 
@@ -191,6 +194,46 @@ function buildFileReport(
   });
 }
 
+function buildExtensionReport(files: ReportFileInfo[]): ReportExtensionInfo[] {
+  const extensionMap = new Map<string, ReportExtensionInfo>();
+
+  for (const file of files) {
+    const extension = resolveExtension(file.path);
+
+    const existing = extensionMap.get(extension);
+    if (!existing) {
+      extensionMap.set(extension, {
+        extension,
+        linesAdded: file.linesAdded,
+        linesDeleted: file.linesDeleted,
+        totalChanges: file.totalChanges,
+        filesCount: 1,
+      });
+      continue;
+    }
+
+    existing.linesAdded += file.linesAdded;
+    existing.linesDeleted += file.linesDeleted;
+    existing.totalChanges += file.totalChanges;
+    existing.filesCount += 1;
+  }
+
+  return Array.from(extensionMap.values()).sort((a, b) => {
+    if (b.totalChanges !== a.totalChanges) {
+      return b.totalChanges - a.totalChanges;
+    }
+    return a.extension.localeCompare(b.extension);
+  });
+}
+
+function resolveExtension(filePath: string): string {
+  const extension = path.extname(filePath);
+  if (extension) {
+    return extension;
+  }
+  return "<sem extensão>";
+}
+
 function computeTotals(users: ReportUserInfo[]): Totals & { prCount: number } {
   return users.reduce(
     (accumulator, user) => {
@@ -219,18 +262,33 @@ function computeAverages(
 }
 
 function buildTable(users: ReportUserInfo[]): ReportTableRow[] {
-  return users.map((user) => ({
-    owner: user.owner,
-    prCount: user.totals.prCount,
-    linesAdded: user.totals.linesAdded,
-    linesDeleted: user.totals.linesDeleted,
-    filesChanged: user.totals.filesChanged,
-    commitsCount: user.totals.commitsCount,
-    avgLinesAdded: user.averages.linesAdded,
-    avgLinesDeleted: user.averages.linesDeleted,
-    avgFilesChanged: user.averages.filesChanged,
-    avgCommitsCount: user.averages.commitsCount,
-  }));
+  return users.map((user) => {
+    // Calcula contagem de linhas por extensão para o usuário
+    const extensionLineCounts: Record<string, { added: number; deleted: number }> = {};
+    for (const pr of user.prs) {
+      for (const file of pr.files) {
+        const ext = resolveExtension(file.path);
+        if (!extensionLineCounts[ext]) {
+          extensionLineCounts[ext] = { added: 0, deleted: 0 };
+        }
+        extensionLineCounts[ext].added += file.linesAdded;
+        extensionLineCounts[ext].deleted += file.linesDeleted;
+      }
+    }
+    return {
+      owner: user.owner,
+      prCount: user.totals.prCount,
+      linesAdded: user.totals.linesAdded,
+      linesDeleted: user.totals.linesDeleted,
+      filesChanged: user.totals.filesChanged,
+      commitsCount: user.totals.commitsCount,
+      avgLinesAdded: user.averages.linesAdded,
+      avgLinesDeleted: user.averages.linesDeleted,
+      avgFilesChanged: user.averages.filesChanged,
+      avgCommitsCount: user.averages.commitsCount,
+      extensionLineCounts,
+    };
+  });
 }
 
 function computeAveragesFromTotals(totals: Totals & { prCount: number }): Averages {
