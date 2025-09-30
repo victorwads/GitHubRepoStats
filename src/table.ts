@@ -107,8 +107,7 @@ export function renderFileChangesTable(files: ReportFileInfo[], limit: number): 
     head: [
       chalk.cyan("Arquivo"),
       chalk.cyan("PRs"),
-      chalk.cyan("Lines +"),
-      chalk.cyan("Lines -"),
+      chalk.cyan("Lines +/-"),
       chalk.cyan("Total"),
     ],
     colAligns: ["left", "right", "right", "right", "right"],
@@ -122,8 +121,7 @@ export function renderFileChangesTable(files: ReportFileInfo[], limit: number): 
     table.push([
       chalk.green(file.path),
       formatInteger(file.prCount),
-      chalk.blue(formatInteger(file.linesAdded)),
-      chalk.red(formatInteger(file.linesDeleted)),
+      formatPM(file.linesAdded, file.linesDeleted),
       formatInteger(file.totalChanges),
     ]);
   }

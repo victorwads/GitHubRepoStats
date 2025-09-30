@@ -54,6 +54,7 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("-r, --repo <repo>", "Nome do repositório (padrão do .env)", process.env.GITHUB_REPO)
     .option("--since <date>", "Considerar PRs mergeados a partir desta data (ISO)", parseDate)
     .option("--until <date>", "Considerar PRs mergeados até esta data (ISO)", parseDate)
+    .option("--last-week", "Considerar apenas PRs da última semana completa (segunda 00:00:00 até domingo 23:59:59)")
     .option("-l, --limit <number>", "Limitar a quantidade de PRs analisados", parseInteger)
     .option("-t, --token <token>", "Token do GitHub. Também lê GITHUB_TOKEN / GH_TOKEN")
     .option("-c, --concurrency <number>", "Limitar requisições concorrentes ao GitHub", parseInteger, 6)
@@ -76,11 +77,41 @@ export async function runCli(argv: string[]): Promise<void> {
       parseInteger,
       10,
     )
-    .action(async (options: CliOptions) => {
+    .action(async (options: CliOptions & { lastWeek?: boolean }) => {
       const resolvedToken = resolveToken(options.token);
+
+      let since = options.since;
+      let until = options.until;
+
+      if (options.lastWeek) {
+        // Sempre pega a semana anterior completa (segunda 00:00:00 até domingo 23:59:59)
+        const now = new Date();
+        // Descobre o dia da semana (0 = domingo, 1 = segunda, ...)
+        const dayOfWeek = now.getDay();
+        // Segunda-feira da semana atual
+        const thisMonday = new Date(now);
+        if (dayOfWeek === 0) {
+          // Se hoje é domingo, segunda é 6 dias atrás
+          thisMonday.setDate(now.getDate() - 6);
+        } else {
+          thisMonday.setDate(now.getDate() - (dayOfWeek - 1));
+        }
+        thisMonday.setHours(0, 0, 0, 0);
+        // Segunda-feira da semana anterior
+        const lastMonday = new Date(thisMonday);
+        lastMonday.setDate(thisMonday.getDate() - 7);
+        // Domingo da semana anterior (6 dias após segunda)
+        const lastSunday = new Date(lastMonday);
+        lastSunday.setDate(lastMonday.getDate() + 6);
+        lastSunday.setHours(23, 59, 59, 999);
+        since = lastMonday;
+        until = lastSunday;
+      }
 
       const cliOptions: CliOptions = {
         ...options,
+        since,
+        until,
         token: resolvedToken,
         ignoreFilePatterns: (options as any).ignoreFile,
       };
@@ -94,8 +125,8 @@ export async function runCli(argv: string[]): Promise<void> {
       .option("-o, --owner <owner>", "Organização ou usuário do repositório (padrão do .env)", process.env.GITHUB_OWNER)
       .option("-r, --repo <repo>", "Nome do repositório (padrão do .env)", process.env.GITHUB_REPO)
       .option("-t, --token <token>", "Token do GitHub. Também lê GITHUB_TOKEN / GH_TOKEN")
-  .option("--comments", "Exibir comentários do PR", false)
-  .option("--diffs", "Exibir o conteúdo do diff do PR", false)
+      .option("--comments", "Exibir comentários do PR", false)
+      .option("--diffs", "Exibir o conteúdo do diff do PR", false)
       .action(async (prNumber: string, options: { owner?: string; repo?: string; token?: string; comments?: boolean; diffs?: boolean }) => {
         const owner = options.owner || process.env.GITHUB_OWNER;
         const repo = options.repo || process.env.GITHUB_REPO;
@@ -158,7 +189,10 @@ async function execute(options: CliOptions): Promise<void> {
 }
 
 function formatDate(date: Date): string {
-  return date.toISOString().split("T")[0];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 if (require.main === module) {
