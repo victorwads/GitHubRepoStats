@@ -131,11 +131,11 @@ function buildUserReports(
   }
 
   return Array.from(userMap.values()).sort((a, b) => {
-    const totalChangesA = a.totals.linesAdded + a.totals.linesDeleted;
-    const totalChangesB = b.totals.linesAdded + b.totals.linesDeleted;
+    const scoreA = a.totals.linesAdded - (a.totals.linesDeleted / 2);
+    const scoreB = b.totals.linesAdded - (b.totals.linesDeleted / 2);
 
-    if (totalChangesB !== totalChangesA) {
-      return totalChangesB - totalChangesA;
+    if (scoreB !== scoreA) {
+      return scoreB - scoreA;
     }
 
     if (b.totals.prCount !== a.totals.prCount) {
@@ -286,6 +286,7 @@ function buildTable(users: ReportUserInfo[]): ReportTableRow[] {
       avgLinesDeleted: user.averages.linesDeleted,
       avgFilesChanged: user.averages.filesChanged,
       avgCommitsCount: user.averages.commitsCount,
+      score: user.totals.linesAdded - (user.totals.linesDeleted / 2),
       extensionLineCounts,
     };
   });

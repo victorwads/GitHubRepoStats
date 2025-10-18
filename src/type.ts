@@ -70,5 +70,6 @@ export interface ReportTableRow {
   avgLinesDeleted: number;
   avgFilesChanged: number;
   avgCommitsCount: number;
+  score: number;
   extensionLineCounts: Record<string, { added: number; deleted: number }>;
 }
