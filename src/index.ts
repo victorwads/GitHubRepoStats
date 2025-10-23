@@ -20,6 +20,12 @@ interface CliOptions {
   filesLimit: number;
 }
 
+type CliCommandOptions = CliOptions & {
+  lastWeek?: boolean;
+  week?: number;
+  ignoreFile?: string[];
+};
+
 function parseDate(value: string): Date {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) {
@@ -32,6 +38,14 @@ function parseInteger(value: string): number {
   const parsed = Number.parseInt(value, 10);
   if (Number.isNaN(parsed) || parsed < 0) {
     throw new InvalidArgumentError(`Expected a positive integer, received: ${value}`);
+  }
+  return parsed;
+}
+
+function parseWeek(value: string): number {
+  const parsed = parseInteger(value);
+  if (parsed < 1) {
+    throw new InvalidArgumentError(`Expected a week number >= 1, received: ${value}`);
   }
   return parsed;
 }
@@ -55,6 +69,11 @@ export async function runCli(argv: string[]): Promise<void> {
     .option("--since <date>", "Considerar PRs mergeados a partir desta data (ISO)", parseDate)
     .option("--until <date>", "Considerar PRs mergeados até esta data (ISO)", parseDate)
     .option("--last-week", "Considerar apenas PRs da última semana completa (segunda 00:00:00 até domingo 23:59:59)")
+    .option(
+      "--week <number>",
+      "Considerar PRs de semanas anteriores (1 = última semana completa, 2 = há duas semanas, ...)",
+      parseWeek,
+    )
     .option("-l, --limit <number>", "Limitar a quantidade de PRs analisados", parseInteger)
     .option("-t, --token <token>", "Token do GitHub. Também lê GITHUB_TOKEN / GH_TOKEN")
     .option("-c, --concurrency <number>", "Limitar requisições concorrentes ao GitHub", parseInteger, 6)
@@ -77,43 +96,29 @@ export async function runCli(argv: string[]): Promise<void> {
       parseInteger,
       10,
     )
-    .action(async (options: CliOptions & { lastWeek?: boolean }) => {
+    .action(async (options: CliCommandOptions) => {
       const resolvedToken = resolveToken(options.token);
 
       let since = options.since;
       let until = options.until;
 
-      if (options.lastWeek) {
-        // Sempre pega a semana anterior completa (segunda 00:00:00 até domingo 23:59:59)
-        const now = new Date();
-        // Descobre o dia da semana (0 = domingo, 1 = segunda, ...)
-        const dayOfWeek = now.getDay();
-        // Segunda-feira da semana atual
-        const thisMonday = new Date(now);
-        if (dayOfWeek === 0) {
-          // Se hoje é domingo, segunda é 6 dias atrás
-          thisMonday.setDate(now.getDate() - 6);
-        } else {
-          thisMonday.setDate(now.getDate() - (dayOfWeek - 1));
-        }
-        thisMonday.setHours(0, 0, 0, 0);
-        // Segunda-feira da semana anterior
-        const lastMonday = new Date(thisMonday);
-        lastMonday.setDate(thisMonday.getDate() - 7);
-        // Domingo da semana anterior (6 dias após segunda)
-        const lastSunday = new Date(lastMonday);
-        lastSunday.setDate(lastMonday.getDate() + 6);
-        lastSunday.setHours(23, 59, 59, 999);
-        since = lastMonday;
-        until = lastSunday;
+      if (typeof options.week === "number") {
+        const range = computeCompleteWeekRange(options.week);
+        since = range.since;
+        until = range.until;
+      } else if (options.lastWeek) {
+        const range = computeCompleteWeekRange(1);
+        since = range.since;
+        until = range.until;
       }
 
+      const { lastWeek, week, ignoreFile, ...rest } = options;
       const cliOptions: CliOptions = {
-        ...options,
+        ...rest,
         since,
         until,
         token: resolvedToken,
-        ignoreFilePatterns: (options as any).ignoreFile,
+        ignoreFilePatterns: ignoreFile,
       };
 
       await execute(cliOptions);
@@ -193,6 +198,26 @@ function formatDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function computeCompleteWeekRange(weeksAgo: number): { since: Date; until: Date } {
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0 (domingo) .. 6 (sábado)
+  const currentMonday = new Date(now);
+  currentMonday.setHours(0, 0, 0, 0);
+
+  const offsetToMonday = dayOfWeek === 0 ? -6 : -(dayOfWeek - 1);
+  currentMonday.setDate(currentMonday.getDate() + offsetToMonday);
+
+  const monday = new Date(currentMonday);
+  monday.setDate(monday.getDate() - weeksAgo * 7);
+  monday.setHours(0, 0, 0, 0);
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+
+  return { since: monday, until: sunday };
 }
 
 if (require.main === module) {
