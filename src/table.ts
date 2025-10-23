@@ -23,18 +23,18 @@ export function renderReportTable(rows: ReportTableRow[], options: TableRenderOp
 
   const head = [
     chalk.cyan("Owner"),
+    chalk.cyan("Score"),
     chalk.cyan("PRs"),
     chalk.cyan("Commits"),
     chalk.cyan("Files"),
     chalk.cyan("Lines +/-"),
-    chalk.cyan("Score"),
     chalk.cyan("Avg Commits"),
     chalk.cyan("Avg Files"),
     chalk.cyan("Avg +/-"),
     ...allExtensions.map((ext) => chalk.cyan(ext)),
   ];
   const colAligns = [
-    "left", "right", "right", "right", "right", "right", "right", "right", "right", "right",
+    "left", "right", "right", "right", "right", "right", "right", "right", "right",
     ...Array(allExtensions.length).fill("right"),
   ];
   const table = new Table({
@@ -47,11 +47,11 @@ export function renderReportTable(rows: ReportTableRow[], options: TableRenderOp
   for (const row of rows) {
     table.push([
       chalk.green(row.owner),
+      formatDecimal(row.score),
       formatInteger(row.prCount),
       formatInteger(row.commitsCount),
       formatInteger(row.filesChanged),
       formatPM(row.linesAdded, row.linesDeleted),
-      formatDecimal(row.score),
       formatDecimal(row.avgCommitsCount),
       formatDecimal(row.avgFilesChanged),
       `${chalk.blue(formatDecimal(row.avgLinesAdded))}${chalk.gray(",")}${chalk.red("-" + formatDecimal(row.avgLinesDeleted))}`,
@@ -77,11 +77,11 @@ export function renderReportTable(rows: ReportTableRow[], options: TableRenderOp
 
   table.push([
     chalk.bold("Total"),
+    formatDecimal(totalScore),
     chalk.bold(formatInteger(options.totals.prCount)),
     chalk.bold(formatInteger(options.totals.commitsCount)),
     chalk.bold(formatInteger(options.totals.filesChanged)),
     formatPM(options.totals.linesAdded, options.totals.linesDeleted),
-    formatDecimal(totalScore),
     chalk.bold(formatDecimal(options.averages.commitsCount)),
     chalk.bold(formatDecimal(options.averages.filesChanged)),
     `${chalk.bold(chalk.blue(formatDecimal(options.averages.linesAdded)))}${chalk.gray(",")}${chalk.bold(chalk.red("-" + formatDecimal(options.averages.linesDeleted)))}`,
@@ -94,6 +94,7 @@ export function renderReportTable(rows: ReportTableRow[], options: TableRenderOp
 
   table.push([
     chalk.bold("Avg/Owner"),
+    "",
     chalk.bold(formatDecimal(options.averages.prCount)),
     "",
     "",
